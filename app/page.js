@@ -13,37 +13,66 @@ export default function Home() {
   ]);
 
   const [input, setInput] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const sendMessage = async () => {
-    if (input.trim() === "") return; // Prevent sending empty messages
+    if (input.trim() === "") return;
 
-    // Add the user's message to the conversation
-    setMessages((prevMessages) => [
-      ...prevMessages,
+    // Add user's message to the conversation immediately
+    const newUserMessages = [
+      ...messages,
       { role: "user", parts: [{ text: input }] },
-    ]);
+    ];
+    setMessages(newUserMessages);
 
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prompt: input }),
-    });
-
-    const data = await response.json();
-
-    // Add the assistant's response to the conversation
-    setMessages((prevMessages) => [
-      ...prevMessages,
-      {
-        role: "assistant",
-        parts: [{ text: data.message }],
-      },
-    ]);
-
-    // Clear the input field
+    // Clear the input field after sending the message
     setInput("");
+
+    // Prevent multiple messages from being sent while streaming
+    if (isStreaming) return;
+    setIsStreaming(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: input }),
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let done, value;
+      let accumulatedText = ""; // Initialize empty string to accumulate streamed text
+
+      // Start with an empty assistant message in the conversation
+      let newMessages = [
+        ...newUserMessages,
+        { role: "assistant", parts: [{ text: "" }] },
+      ];
+      setMessages(newMessages);
+
+      while (!done) {
+        ({ done, value } = await reader.read());
+        if (value) {
+          accumulatedText += decoder.decode(value, { stream: true });
+          // Update the last message (assistant's response) dynamically
+          setMessages((prev) => {
+            const updatedMessages = [...prev];
+            updatedMessages[updatedMessages.length - 1] = {
+              role: "assistant",
+              parts: [{ text: accumulatedText }],
+            };
+            return updatedMessages;
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error during message streaming:", error);
+    } finally {
+      setIsStreaming(false); // Reset streaming state
+    }
   };
 
   return (
@@ -89,7 +118,6 @@ export default function Home() {
                 p={2}
                 borderRadius={3}
                 color="white"
-                maxWidth="70%"
               >
                 {message.parts.map((part, partIndex) => (
                   <span key={partIndex}>{part.text}</span>
@@ -106,7 +134,10 @@ export default function Home() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => {
-                if (e.key === "Enter") sendMessage();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
               }}
             />
             <Button variant="contained" color="primary" onClick={sendMessage}>
